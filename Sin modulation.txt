@@ -1,0 +1,87 @@
+1) Hàm sin + PCA fitting (Python – dùng trực tiếp)
+import numpy as np
+from scipy.optimize import curve_fit
+from sklearn.metrics import mean_squared_error, r2_score
+2) Hàm sin chuẩn
+def ham_sin(t, A, phi, C):
+    """
+    Mô hình sin cho PCA:
+    A: biên độ
+    phi: pha
+    C: offset
+    """
+    return A * np.sin(2 * np.pi * t + phi) + C
+
+3) Hàm fitting PCA → sinusoidal model
+def fitting_sinusoidal_pca(
+    pca_scores,          # (N_pha,)
+    calibration=1000.0   # 1000 units ≈ 1 mm
+):
+    """
+    Fit PCA score bằng mô hình sin.
+    
+    Trả về:
+    - Amplitude (units & mm)
+    - RMSE (units & mm)
+    - R²
+    - Tham số mô hình
+    """
+
+    N = len(pca_scores)
+    t = np.linspace(0, 1, N, endpoint=False)  # pha hô hấp chuẩn hóa [0,1)
+
+    # Giá trị khởi tạo
+    A0 = (np.max(pca_scores) - np.min(pca_scores)) / 2
+    phi0 = 0.0
+    C0 = np.mean(pca_scores)
+
+    popt, _ = curve_fit(
+        ham_sin, t, pca_scores,
+        p0=[A0, phi0, C0],
+        maxfev=10000
+    )
+
+    A, phi, C = popt
+
+    # Giá trị dự đoán
+    y_fit = ham_sin(t, A, phi, C)
+
+    # Sai số
+    rmse_units = np.sqrt(mean_squared_error(pca_scores, y_fit))
+    r2 = r2_score(pca_scores, y_fit)
+
+    # Hiệu chuẩn sang mm
+    A_mm = A / calibration
+    rmse_mm = rmse_units / calibration
+
+    return {
+        "Amplitude_units": np.abs(A),
+        "Amplitude_mm": np.abs(A_mm),
+        "RMSE_units": rmse_units,
+        "RMSE_mm": rmse_mm,
+        "R2": r2,
+        "Phase_phi": phi,
+        "Offset_C": C,
+        "Fitted_curve": y_fit
+    }
+
+4) Áp dụng cho PC1 – PC2 – PC3
+
+pc_scores = out["pc_scores"]  # shape (N_pha, 3)
+
+5) Chạy fitting
+ket_qua = {}
+
+for i, ten_pc in enumerate(["PC1", "PC2", "PC3"]):
+    ket_qua[ten_pc] = fitting_sinusoidal_pca(
+        pc_scores[:, i],
+        calibration=1000.0
+    )
+6) In kết quả
+for pc, kq in ket_qua.items():
+    print(f"\n{pc}")
+    print(f"Biên độ: {kq['Amplitude_units']:.1f} units "
+          f"({kq['Amplitude_mm']:.1f} mm)")
+    print(f"RMSE: {kq['RMSE_units']:.0f} units "
+          f"({kq['RMSE_mm']:.2f} mm)")
+    print(f"R²: {kq['R2']:.3f}")
