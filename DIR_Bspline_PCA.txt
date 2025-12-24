@@ -1,0 +1,250 @@
+1) Cài thư viện
+pip install SimpleITK numpy scikit-learn
+2) Code (DICOM 4DCT + mask từng pha) – DIR B-spline + PCA PC1–PC3
+import os
+import numpy as np
+import SimpleITK as sitk
+from sklearn.decomposition import PCA
+
+
+# =========================
+# ĐỌC DICOM (mỗi pha = 1 thư mục)
+# =========================
+def doc_dicom_series(folder: str) -> sitk.Image:
+    """
+    Đọc một series DICOM trong 1 thư mục (đã được tách theo pha).
+    Trả về ảnh CT (Float32).
+    """
+    reader = sitk.ImageSeriesReader()
+    series_ids = reader.GetGDCMSeriesIDs(folder)
+    if not series_ids:
+        raise FileNotFoundError(f"Không tìm thấy DICOM series trong thư mục: {folder}")
+
+    # Nếu có nhiều series trong cùng folder thì lấy series đầu tiên
+    series_file_names = reader.GetGDCMSeriesFileNames(folder, series_ids[0])
+    reader.SetFileNames(series_file_names)
+    img = reader.Execute()
+    img = sitk.Cast(img, sitk.sitkFloat32)
+    return img
+
+
+# =========================
+# ĐỌC MASK (đã xuất ra MHA/NIfTI) theo từng pha
+# =========================
+def doc_mask(path: str) -> sitk.Image:
+    m = sitk.ReadImage(path)
+    m = sitk.Cast(m > 0, sitk.sitkUInt8)
+    return m
+
+
+# =========================
+# TÍNH CENTROID (tọa độ vật lý mm)
+# =========================
+def centroid_vatly(mask: sitk.Image) -> np.ndarray:
+    stats = sitk.LabelShapeStatisticsImageFilter()
+    stats.Execute(mask)
+    if not stats.HasLabel(1):
+        raise ValueError("Mask không có vùng foreground (label=1).")
+    c = stats.GetCentroid(1)  # (x,y,z) trong hệ tọa độ vật lý (mm)
+    return np.array(c, dtype=float)
+
+
+# =========================
+# ĐĂNG KÍ BIẾN DẠNG B-SPLINE (moving -> fixed)
+# =========================
+def dangky_bspline(
+    fixed: sitk.Image,
+    moving: sitk.Image,
+    grid_physical_spacing=(40.0, 40.0, 40.0),
+    sampling_percentage=0.2,
+    max_iter=200
+) -> sitk.Transform:
+    """
+    B-spline DIR: đưa moving về fixed.
+    grid_physical_spacing nhỏ -> mềm hơn nhưng dễ overfit artefact 4DCT.
+    """
+    fixed_spacing = np.array(fixed.GetSpacing(), dtype=float)
+    fixed_size = np.array(fixed.GetSize(), dtype=int)
+    fixed_physical_size = fixed_spacing * (fixed_size - 1)
+
+    grid_physical_spacing = np.array(grid_physical_spacing, dtype=float)
+    mesh_size = np.maximum((fixed_physical_size / grid_physical_spacing).astype(int), 1).tolist()
+
+    tx0 = sitk.BSplineTransformInitializer(fixed, transformDomainMeshSize=mesh_size, order=3)
+
+    reg = sitk.ImageRegistrationMethod()
+    reg.SetInitialTransform(tx0, inPlace=False)
+
+    reg.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
+    reg.SetMetricSamplingStrategy(reg.RANDOM)
+    reg.SetMetricSamplingPercentage(sampling_percentage, seed=42)
+
+    reg.SetInterpolator(sitk.sitkLinear)
+
+    reg.SetOptimizerAsLBFGSB(
+        gradientConvergenceTolerance=1e-5,
+        numberOfIterations=max_iter,
+        maximumNumberOfCorrections=5,
+        maximumNumberOfFunctionEvaluations=1000,
+        costFunctionConvergenceFactor=1e+7
+    )
+
+    reg.SetShrinkFactorsPerLevel([4, 2, 1])
+    reg.SetSmoothingSigmasPerLevel([2, 1, 0])
+    reg.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+
+    tx = reg.Execute(fixed, moving)
+    return tx
+
+
+# =========================
+# RESAMPLE mask về fixed (nearest neighbor)
+# =========================
+def resample_mask_ve_fixed(mask_moving: sitk.Image, fixed: sitk.Image, tx: sitk.Transform) -> sitk.Image:
+    return sitk.Resample(
+        mask_moving, fixed, tx,
+        sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8
+    )
+
+
+# =========================
+# CHUỖI DỊCH CHUYỂN centroid theo pha (mm)
+# =========================
+def do_lech_tuongdoi(centroids_mm_xyz: np.ndarray, ref_idx=0) -> np.ndarray:
+    """
+    centroids_mm_xyz: (T,3) theo (x,y,z) mm
+    trả về displacement so với pha tham chiếu
+    """
+    ref = centroids_mm_xyz[ref_idx]
+    return centroids_mm_xyz - ref
+
+
+def bien_do_peak_to_peak(x: np.ndarray) -> np.ndarray:
+    """Biên độ peak-to-peak theo mỗi cột: max - min"""
+    return x.max(axis=0) - x.min(axis=0)
+
+
+# =========================
+# GÁN NHÃN PC -> TRỤC GIẢI PHẪU (x/y/z) theo loading lớn nhất
+# =========================
+def gan_pc_vao_truc(pca_components: np.ndarray) -> np.ndarray:
+    """
+    pca_components: (3,3) - mỗi hàng là 1 vector đơn vị trong (x,y,z)
+    trả về mapping (PCi -> axis index) theo heuristic loading lớn nhất, tránh trùng.
+    """
+    abs_load = np.abs(pca_components)
+    used_axes = set()
+    mapping = [-1, -1, -1]
+    for i in range(3):
+        order = np.argsort(-abs_load[i])  # axis mạnh nhất trước
+        for ax in order:
+            if ax not in used_axes:
+                mapping[i] = int(ax)
+                used_axes.add(ax)
+                break
+    return np.array(mapping, dtype=int)
+
+
+# =========================
+# PIPELINE CHÍNH: DICOM -> BSPLINE -> centroid -> PCA (PC1-3)
+# =========================
+def chay_pca_centroid_dicom(
+    phase_folders,          # list folder DICOM theo pha
+    phase_mask_paths,       # list file mask theo pha (mha/nii.gz) cùng thứ tự
+    ref_idx=0,
+    grid_spacing=(40, 40, 40)
+):
+    assert len(phase_folders) == len(phase_mask_paths), "Số pha CT và số mask phải bằng nhau."
+    T = len(phase_folders)
+
+    # Đọc fixed (pha tham chiếu)
+    fixed = doc_dicom_series(phase_folders[ref_idx])
+    fixed_mask = doc_mask(phase_mask_paths[ref_idx])
+
+    # centroid pha tham chiếu
+    c_ref = centroid_vatly(fixed_mask)
+
+    # danh sách transform (mỗi pha -> fixed)
+    transforms = [None] * T
+    transforms[ref_idx] = sitk.Transform(3, sitk.sitkIdentity)
+
+    # centroid sau khi đưa mask từng pha về fixed
+    centroids = [None] * T
+    centroids[ref_idx] = c_ref
+
+    for t in range(T):
+        if t == ref_idx:
+            continue
+
+        moving = doc_dicom_series(phase_folders[t])
+        tx = dangky_bspline(fixed=fixed, moving=moving, grid_physical_spacing=grid_spacing)
+        transforms[t] = tx
+
+        moving_mask = doc_mask(phase_mask_paths[t])
+        moved_mask_in_fixed = resample_mask_ve_fixed(moving_mask, fixed, tx)
+        centroids[t] = centroid_vatly(moved_mask_in_fixed)
+
+    centroids = np.stack(centroids, axis=0)  # (T,3)
+
+    # displacement theo pha (mm)
+    disp = do_lech_tuongdoi(centroids, ref_idx=ref_idx)  # (T,3)
+
+    # PCA chỉ lấy 3 PC đầu
+    pca = PCA(n_components=3)
+    scores = pca.fit_transform(disp)         # (T,3) chuỗi PC1-3 theo pha
+    comps = pca.components_                  # (3,3) loading PC trong (x,y,z)
+    evr = pca.explained_variance_ratio_
+
+    # Biên độ PC (mm) theo peak-to-peak
+    amp_pc = bien_do_peak_to_peak(scores)    # (3,)
+
+    # Gợi ý PC tương ứng trục nào (x/y/z)
+    mapping = gan_pc_vao_truc(comps)
+
+    # Lưu ý: x/y/z phụ thuộc orientation ảnh của bạn.
+    # Thông thường với DICOM LPS: x ~ L-R, y ~ P-A, z ~ I-S (nhưng cần xác nhận!)
+    ten_truc = np.array(["x", "y", "z"])
+    pc_to_axis = [ten_truc[m] if m >= 0 else "?" for m in mapping]
+
+    return {
+        "centroids_mm_xyz": centroids,
+        "disp_mm_xyz": disp,
+        "pc_scores": scores,
+        "pc_components_xyz": comps,
+        "explained_variance_ratio": evr,
+        "amp_pc_peak_to_peak_mm": amp_pc,
+        "pc_to_axis_guess": pc_to_axis,
+        "transforms": transforms,
+        "fixed_image": fixed
+    }
+
+
+# =========================
+# VÍ DỤ CHẠY
+# =========================
+if __name__ == "__main__":
+    # Ví dụ: 10 pha
+    phase_folders = [
+        r"D:\4DCT\phase00", r"D:\4DCT\phase10", r"D:\4DCT\phase20", r"D:\4DCT\phase30", r"D:\4DCT\phase40",
+        r"D:\4DCT\phase50", r"D:\4DCT\phase60", r"D:\4DCT\phase70", r"D:\4DCT\phase80", r"D:\4DCT\phase90",
+    ]
+
+    # Mask từng pha đã export ra file (mha/nii.gz) và đúng thứ tự pha
+    phase_masks = [
+        r"D:\4DCT\masks\gtv_phase00.nii.gz", r"D:\4DCT\masks\gtv_phase10.nii.gz",
+        r"D:\4DCT\masks\gtv_phase20.nii.gz", r"D:\4DCT\masks\gtv_phase30.nii.gz",
+        r"D:\4DCT\masks\gtv_phase40.nii.gz", r"D:\4DCT\masks\gtv_phase50.nii.gz",
+        r"D:\4DCT\masks\gtv_phase60.nii.gz", r"D:\4DCT\masks\gtv_phase70.nii.gz",
+        r"D:\4DCT\masks\gtv_phase80.nii.gz", r"D:\4DCT\masks\gtv_phase90.nii.gz",
+    ]
+
+    out = chay_pca_centroid_dicom(
+        phase_folders, phase_masks,
+        ref_idx=0,
+        grid_spacing=(40, 40, 40)   # thử 40mm; nếu chuyển động nhỏ/khối u nhỏ có thể giảm 30mm
+    )
+
+    print("Tỷ lệ phương sai giải thích (PC1-3):", out["explained_variance_ratio"])
+    print("Biên độ peak-to-peak của PC1-3 (mm):", out["amp_pc_peak_to_peak_mm"])
+    print("Gợi ý PC -> trục (x/y/z):", out["pc_to_axis_guess"])
+    print("Loading PC (hàng PC1..3; cột x,y,z):\n", out["pc_components_xyz"])
