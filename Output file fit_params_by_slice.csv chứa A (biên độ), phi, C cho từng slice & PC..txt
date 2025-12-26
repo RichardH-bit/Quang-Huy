@@ -1,0 +1,90 @@
+# Mỗi dòng là 1 lát cắt – 1 pha – 1 PC.
+Ví dụ header CSV:
+----------------------
+slice,phase,PC1,PC2,PC3
+0,T00,....,....,...
+0,T10,....,....,...
+...
+77,T90,....,....,...
+--------------------------
+# Code đọc CSV → fit sin cho mọi lát cắt & PC
+--------------------------------------------------
+import numpy as np
+import pandas as pd
+from scipy.optimize import curve_fit
+
+def sinusoid_fixed_omega(t, A, phi, C, omega):
+    return A * np.sin(omega * t + phi) + C
+
+def fit_one_series_curve_fit(y, t, omega):
+    y = np.asarray(y, dtype=float)
+    t = np.asarray(t, dtype=float)
+
+    A0 = (np.max(y) - np.min(y)) / 2.0
+    C0 = float(np.mean(y))
+    phi0 = 0.0
+
+    # Nếu gần phẳng
+    if abs(A0) < 1e-12:
+        return dict(A=0.0, phi=0.0, C=C0, omega=omega, success=True, msg="flat")
+
+    def model(tt, A, phi, C):
+        return sinusoid_fixed_omega(tt, A, phi, C, omega)
+
+    # bounds cho phi để ổn định
+    bounds = ((-np.inf, -np.pi, -np.inf), (np.inf, np.pi, np.inf))
+
+    try:
+        popt, _ = curve_fit(model, t, y, p0=(A0, phi0, C0), bounds=bounds, maxfev=20000)
+        A, phi, C = map(float, popt)
+        return dict(A=A, phi=phi, C=C, omega=omega, success=True, msg="OK")
+    except Exception as e:
+        return dict(A=float(A0), phi=float(phi0), C=float(C0), omega=omega, success=False, msg=str(e))
+
+def fit_from_csv_long(csv_path, phase_col="phase"):
+    df = pd.read_csv(csv_path)
+
+    # Map pha T00..T90 -> 0..9 (nếu pha đang là chuỗi)
+    if df[phase_col].dtype == object:
+        phase_map = {f"T{p:02d}": i for i, p in enumerate(range(0, 100, 10))}  # T00..T90
+        df["t"] = df[phase_col].map(phase_map)
+        if df["t"].isna().any():
+            raise ValueError("Có pha không khớp T00..T90. Kiểm tra cột phase.")
+    else:
+        # nếu pha đã là số 0..9 hoặc 0..90
+        vals = df[phase_col].to_numpy()
+        if np.max(vals) <= 9:
+            df["t"] = vals
+        else:
+            df["t"] = (vals / 10).astype(int)
+
+    # omega cố định cho 10 pha
+    omega = 2.0 * np.pi / 10.0
+
+    results = []
+    for s, g in df.groupby("slice"):
+        g = g.sort_values("t")
+        t = g["t"].to_numpy()
+
+        for pc in ["PC1", "PC2", "PC3"]:
+            y = g[pc].to_numpy()
+            fit = fit_one_series_curve_fit(y, t, omega)
+            results.append({
+                "slice": int(s),
+                "pc": pc,
+                "A": fit["A"],
+                "phi": fit["phi"],
+                "C": fit["C"],
+                "omega": fit["omega"],
+                "success": fit["success"],
+                "message": fit["msg"],
+            })
+
+    return pd.DataFrame(results)
+
+# --- RUN ---
+if __name__ == "__main__":
+    csv_path = "pca_by_slice_phase.csv"  # đổi tên file của anh
+    out = fit_from_csv_long(csv_path)
+    out.to_csv("fit_params_by_slice.csv", index=False)
+    print(out.head())
