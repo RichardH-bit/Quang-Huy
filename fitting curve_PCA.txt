@@ -1,0 +1,200 @@
+Dưới đây là đoạn code Python: dùng tối ưu hóa phi tuyến bình phương tối thiểu với scipy.optimize.curve_fit để fit mô hình sin cho từng thành phần PCA (PC1/PC2/PC3) tại mỗi lát cắt.
+----------------------------------------------------------------------------------------------
+Mô hình: PCi​(t)=Ai​sin(ωt+φi​)+Ci
+Khởi tạo: Ai​=(max(PCi​)−min(PCi​)​)/2
+Ci​=mean(PCi​)
+φi​=0
+Fit riêng cho từng lát cắt, từng PC
+---------------------------------------------------------------------------------------------
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, Tuple, Optional, Any
+
+from scipy.optimize import curve_fit
+
+
+def sinusoid(t: np.ndarray, A: float, phi: float, C: float, omega: float) -> np.ndarray:
+    """Sinusoidal model: y(t) = A*sin(omega*t + phi) + C"""
+    return A * np.sin(omega * t + phi) + C
+
+
+def rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+
+
+def r2_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    if ss_tot == 0:
+        return float("nan")
+    return float(1 - ss_res / ss_tot)
+
+
+@dataclass
+class FitResult:
+    A: float
+    phi: float
+    C: float
+    omega: float
+    rmse: float
+    r2: float
+    success: bool
+    message: str
+    cov: Optional[np.ndarray] = None
+
+
+def fit_sinusoid_curve_fit(
+    y: np.ndarray,
+    t: Optional[np.ndarray] = None,
+    omega: Optional[float] = None,
+    phase_is_10bins: bool = True,
+    bounds: Optional[Tuple[Tuple[float, ...], Tuple[float, ...]]] = None,
+    maxfev: int = 20000,
+) -> FitResult:
+    """
+    Fit y(t) with sinusoid using scipy.optimize.curve_fit.
+
+    Parameters
+    ----------
+    y : array shape (T,)
+        PCA time-series for one component at one slice (e.g., PC1 over 10 phases).
+    t : array shape (T,), optional
+        Time/phase coordinate. If None and phase_is_10bins=True, uses t=0..9.
+    omega : float, optional
+        Angular frequency. If None:
+          - if phase_is_10bins=True, omega = 2*pi/10 (one breathing cycle over 10 phases)
+          - else omega = 2*pi/(t.max()-t.min()) as a rough default
+    bounds : (lower, upper), optional
+        Bounds for (A, phi, C). omega is fixed (not fitted) in this implementation.
+    """
+
+    y = np.asarray(y, dtype=float).ravel()
+    T = y.size
+
+    if t is None:
+        t = np.arange(T, dtype=float) if phase_is_10bins else np.linspace(0.0, 1.0, T)
+    else:
+        t = np.asarray(t, dtype=float).ravel()
+        if t.size != T:
+            raise ValueError(f"t has size {t.size} but y has size {T}")
+
+    # Set omega (fixed)
+    if omega is None:
+        if phase_is_10bins:
+            omega = 2.0 * np.pi / float(T)  # T=10 => 2*pi/10
+        else:
+            span = float(np.max(t) - np.min(t))
+            omega = 2.0 * np.pi / span if span > 0 else 2.0 * np.pi
+
+    # Initial guesses per your description
+    A0 = (np.max(y) - np.min(y)) / 2.0
+    C0 = float(np.mean(y))
+    phi0 = 0.0
+
+    # If signal is nearly flat, handle gracefully
+    if not np.isfinite(A0) or abs(A0) < 1e-12:
+        yhat = np.full_like(y, C0)
+        return FitResult(A=0.0, phi=0.0, C=C0, omega=omega,
+                         rmse=rmse(y, yhat), r2=r2_score(y, yhat),
+                         success=True, message="Flat/near-flat signal; returned constant fit.", cov=None)
+
+    # Fit only (A, phi, C); keep omega fixed by closure
+    def model_fixed_omega(tt, A, phi, C):
+        return sinusoid(tt, A, phi, C, omega)
+
+    # Default bounds: allow any A, phi in [-pi, pi], C unbounded
+    if bounds is None:
+        lower = (-np.inf, -np.pi, -np.inf)
+        upper = ( np.inf,  np.pi,  np.inf)
+        bounds = (lower, upper)
+
+    try:
+        popt, pcov = curve_fit(
+            f=model_fixed_omega,
+            xdata=t,
+            ydata=y,
+            p0=(A0, phi0, C0),
+            bounds=bounds,
+            maxfev=maxfev
+        )
+        A, phi, C = map(float, popt)
+        yhat = model_fixed_omega(t, A, phi, C)
+        return FitResult(
+            A=A, phi=phi, C=C, omega=omega,
+            rmse=rmse(y, yhat),
+            r2=r2_score(y, yhat),
+            success=True,
+            message="OK",
+            cov=pcov
+        )
+    except Exception as e:
+        # Fallback: just return initial guess if fit fails
+        yhat = model_fixed_omega(t, A0, phi0, C0)
+        return FitResult(
+            A=float(A0), phi=float(phi0), C=float(C0), omega=omega,
+            rmse=rmse(y, yhat),
+            r2=r2_score(y, yhat),
+            success=False,
+            message=f"curve_fit failed: {e}",
+            cov=None
+        )
+
+
+def fit_all_slices_all_pcs(
+    pc_array: np.ndarray,
+    t: Optional[np.ndarray] = None,
+    omega: Optional[float] = None,
+    phase_is_10bins: bool = True
+) -> Dict[Tuple[int, int], FitResult]:
+    """
+    Fit sinusoid for every (slice, pc) pair.
+
+    Parameters
+    ----------
+    pc_array : ndarray shape (n_slices, n_phases, n_pcs)
+        Example: (78, 10, 3) for 78 slices, 10 phases, 3 PCA components.
+    Returns
+    -------
+    results : dict with keys (slice_idx, pc_idx) -> FitResult
+    """
+    pc_array = np.asarray(pc_array, dtype=float)
+    if pc_array.ndim != 3:
+        raise ValueError("pc_array must have shape (n_slices, n_phases, n_pcs)")
+
+    n_slices, n_phases, n_pcs = pc_array.shape
+    results: Dict[Tuple[int, int], FitResult] = {}
+
+    for s in range(n_slices):
+        for p in range(n_pcs):
+            y = pc_array[s, :, p]  # time-series across phases
+            res = fit_sinusoid_curve_fit(
+                y=y, t=t, omega=omega, phase_is_10bins=phase_is_10bins
+            )
+            results[(s, p)] = res
+
+    return results
+
+
+# -------------------------
+# Example usage
+# -------------------------
+if __name__ == "__main__":
+    # Example dummy data: n_slices=2, n_phases=10, n_pcs=3
+    n_slices, n_phases, n_pcs = 2, 10, 3
+    t = np.arange(n_phases)
+
+    # Make synthetic PC signals
+    rng = np.random.default_rng(0)
+    omega = 2*np.pi/n_phases
+    pc = np.zeros((n_slices, n_phases, n_pcs), dtype=float)
+    for s in range(n_slices):
+        pc[s, :, 0] = 5000*np.sin(omega*t + 0.2) + 1000 + rng.normal(0, 200, size=n_phases)
+        pc[s, :, 1] = 3000*np.sin(omega*t - 0.5) +  500 + rng.normal(0, 150, size=n_phases)
+        pc[s, :, 2] = 2000*np.sin(omega*t + 1.0) +  200 + rng.normal(0, 120, size=n_phases)
+
+    results = fit_all_slices_all_pcs(pc, t=t, omega=omega, phase_is_10bins=True)
+
+    # Print a few results
+    for (s, p), res in list(results.items())[:3]:
+        print(f"Slice {s}, PC{p+1}: A={res.A:.2f}, phi={res.phi:.3f}, C={res.C:.2f}, "
+              f"RMSE={res.rmse:.2f}, R2={res.r2:.3f}, success={res.success}")
