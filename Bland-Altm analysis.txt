@@ -1,0 +1,92 @@
+Bland–Altman cho nhiều bệnh nhân (gộp tất cả điểm)
+1 biểu đồ BA chung cho cohort 31 BN theo từng trục.
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import List, Dict, Union
+
+ArrayLike = Union[List[float], np.ndarray]
+
+def flatten_pairs(ref_list: List[ArrayLike], pred_list: List[ArrayLike]) -> (np.ndarray, np.ndarray):
+    """
+    Flatten list of arrays into 1D pooled arrays.
+    """
+    if len(ref_list) != len(pred_list):
+        raise ValueError("ref_list and pred_list must have same length.")
+    ref_all = []
+    pred_all = []
+    for ref, pred in zip(ref_list, pred_list):
+        ref = np.asarray(ref, dtype=float).ravel()
+        pred = np.asarray(pred, dtype=float).ravel()
+        if ref.shape != pred.shape:
+            raise ValueError(f"Shape mismatch in one patient: {ref.shape} vs {pred.shape}")
+        ref_all.append(ref)
+        pred_all.append(pred)
+    return np.concatenate(ref_all), np.concatenate(pred_all)
+
+
+def bland_altman_pooled(ref_list: List[ArrayLike], pred_list: List[ArrayLike], loa_z: float = 1.96) -> Dict[str, float]:
+    """
+    Pooled Bland–Altman across multiple patients.
+    """
+    ref_all, pred_all = flatten_pairs(ref_list, pred_list)
+
+    mean = (ref_all + pred_all) / 2.0
+    diff = pred_all - ref_all
+
+    bias = float(np.mean(diff))
+    sd = float(np.std(diff, ddof=1)) if diff.size > 1 else 0.0
+    loa_low = bias - loa_z * sd
+    loa_high = bias + loa_z * sd
+
+    return {"bias": bias, "sd_diff": sd, "loa_low": loa_low, "loa_high": loa_high, "n": int(diff.size)}
+
+
+def plot_bland_altman_pooled(
+    ref_list: List[ArrayLike],
+    pred_list: List[ArrayLike],
+    title: str,
+    loa_z: float = 1.96,
+    show: bool = True
+) -> Dict[str, float]:
+    """
+    Plot pooled Bland–Altman for multiple patients.
+    """
+    ref_all, pred_all = flatten_pairs(ref_list, pred_list)
+    mean = (ref_all + pred_all) / 2.0
+    diff = pred_all - ref_all
+
+    stats = bland_altman_pooled(ref_list, pred_list, loa_z=loa_z)
+
+    plt.figure()
+    plt.scatter(mean, diff)
+    plt.axhline(stats["bias"], linestyle="--")
+    plt.axhline(stats["loa_low"], linestyle="--")
+    plt.axhline(stats["loa_high"], linestyle="--")
+    plt.xlabel("Mean of two methods")
+    plt.ylabel("Difference (pred - ref)")
+    plt.title(title)
+
+    txt = f"Bias={stats['bias']:.3f}; LoA=[{stats['loa_low']:.3f}, {stats['loa_high']:.3f}]; n={stats['n']}"
+    plt.gca().text(0.02, 0.98, txt, transform=plt.gca().transAxes, va="top")
+
+    if show:
+        plt.show()
+
+    return stats
+
+
+# ---------------- Example pooled ----------------
+if __name__ == "__main__":
+    # Each element is one patient (10 phases)
+    ref_list = [
+        [0,1,2,3,4,3,2,1,0,0],
+        [0,2,3,5,6,5,3,2,1,0]
+    ]
+    pred_list = [
+        [0.1,1.0,2.1,3.0,3.9,3.1,1.9,1.1,0.1,-0.1],
+        [0.2,2.1,3.0,5.1,5.8,4.9,3.2,2.1,0.9,0.1]
+    ]
+
+    stats = plot_bland_altman_pooled(ref_list, pred_list, title="Pooled Bland–Altman (SI, mm)")
+    print(stats)
+---------------------------------------------------------------------

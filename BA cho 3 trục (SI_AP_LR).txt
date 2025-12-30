@@ -1,0 +1,145 @@
+pooled BA cho 3 trục (SI/AP/LR)
+
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import Dict, List, Union, Tuple
+
+ArrayLike = Union[List[float], np.ndarray]
+
+def _to_1d(a: ArrayLike) -> np.ndarray:
+    return np.asarray(a, dtype=float).ravel()
+
+def _flatten_pairs(ref_list: List[ArrayLike], pred_list: List[ArrayLike]) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Flatten list of paired arrays (one per patient) into pooled 1D arrays.
+    Each patient can be 1D (e.g., 10 phases) or 2D; it will be flattened.
+    """
+    if len(ref_list) != len(pred_list):
+        raise ValueError("ref_list and pred_list must have the same length.")
+    ref_all, pred_all = [], []
+    for i, (r, p) in enumerate(zip(ref_list, pred_list), start=1):
+        r = _to_1d(r)
+        p = _to_1d(p)
+        if r.shape != p.shape:
+            raise ValueError(f"Patient {i}: shape mismatch ref {r.shape} vs pred {p.shape}")
+        ref_all.append(r)
+        pred_all.append(p)
+    return np.concatenate(ref_all), np.concatenate(pred_all)
+
+def bland_altman_pooled_stats(ref_list: List[ArrayLike], pred_list: List[ArrayLike], loa_z: float = 1.96) -> Dict[str, float]:
+    """
+    Compute pooled Bland–Altman stats across multiple patients.
+    """
+    ref_all, pred_all = _flatten_pairs(ref_list, pred_list)
+    diff = pred_all - ref_all                  # (model - reference)
+    mean = (pred_all + ref_all) / 2.0
+
+    bias = float(np.mean(diff))
+    sd = float(np.std(diff, ddof=1)) if diff.size > 1 else 0.0
+    loa_low = float(bias - loa_z * sd)
+    loa_high = float(bias + loa_z * sd)
+
+    return {
+        "n_points": int(diff.size),
+        "bias": bias,
+        "sd_diff": sd,
+        "loa_low": loa_low,
+        "loa_high": loa_high,
+        "mean_of_means": float(np.mean(mean)),
+    }
+
+def plot_bland_altman_pooled(ref_list: List[ArrayLike], pred_list: List[ArrayLike],
+                             axis_name: str, unit: str = "mm", loa_z: float = 1.96,
+                             show: bool = True) -> Dict[str, float]:
+    """
+    Plot pooled Bland–Altman and return stats.
+    """
+    ref_all, pred_all = _flatten_pairs(ref_list, pred_list)
+    mean = (pred_all + ref_all) / 2.0
+    diff = pred_all - ref_all
+
+    stats = bland_altman_pooled_stats(ref_list, pred_list, loa_z=loa_z)
+
+    plt.figure()
+    plt.scatter(mean, diff)
+    plt.axhline(stats["bias"], linestyle="--")
+    plt.axhline(stats["loa_low"], linestyle="--")
+    plt.axhline(stats["loa_high"], linestyle="--")
+    plt.xlabel(f"Mean of two methods ({unit})")
+    plt.ylabel(f"Difference (PCA–sin − 4DCT) ({unit})")
+    plt.title(f"Pooled Bland–Altman ({axis_name})")
+
+    ann = (
+        f"n={stats['n_points']}\n"
+        f"Bias={stats['bias']:.3f} {unit}\n"
+        f"LoA=[{stats['loa_low']:.3f}, {stats['loa_high']:.3f}] {unit}\n"
+        f"SD(diff)={stats['sd_diff']:.3f} {unit}"
+    )
+    plt.gca().text(0.02, 0.98, ann, transform=plt.gca().transAxes, va="top", ha="left")
+
+    if show:
+        plt.show()
+
+    return stats
+
+def bland_altman_pooled_3axes(
+    ref: Dict[str, List[ArrayLike]],
+    pred: Dict[str, List[ArrayLike]],
+    axes: Tuple[str, ...] = ("SI", "AP", "LR"),
+    unit: str = "mm",
+    loa_z: float = 1.96,
+    show_plots: bool = True
+) -> Dict[str, Dict[str, float]]:
+    """
+    ref/pred: dict mapping axis -> list_of_patients
+      Example: ref["SI"] is a list length 31, each element is 10-phase motion (mm)
+    Returns: dict[axis] -> stats
+    """
+    stats_all = {}
+    for ax in axes:
+        if ax not in ref or ax not in pred:
+            raise KeyError(f"Missing axis '{ax}' in ref or pred.")
+        stats_all[ax] = plot_bland_altman_pooled(
+            ref[ax], pred[ax],
+            axis_name=ax, unit=unit,
+            loa_z=loa_z, show=show_plots
+        )
+    return stats_all
+
+
+# ---------------------- Example usage ----------------------
+if __name__ == "__main__":
+    # Example with 2 patients (replace by 31 patients)
+    # Each patient has 10 phases per axis
+    ref = {
+        "SI": [
+            [0,1,2,3,4,3,2,1,0,0],
+            [0,2,3,5,6,5,3,2,1,0]
+        ],
+        "AP": [
+            [0,0.5,1.0,1.5,2.0,1.6,1.0,0.6,0.2,0],
+            [0,0.7,1.2,1.8,2.2,1.9,1.3,0.7,0.3,0]
+        ],
+        "LR": [
+            [0,0.3,0.6,0.9,1.0,0.8,0.5,0.3,0.1,0],
+            [0,0.2,0.5,0.8,1.1,0.9,0.6,0.3,0.2,0]
+        ]
+    }
+
+    pred = {
+        "SI": [
+            [0.1,1.0,2.1,3.0,3.9,3.1,1.9,1.1,0.1,-0.1],
+            [0.2,2.1,3.0,5.1,5.8,4.9,3.2,2.1,0.9,0.1]
+        ],
+        "AP": [
+            [0.0,0.6,1.0,1.6,1.9,1.5,1.1,0.5,0.3,-0.1],
+            [0.1,0.8,1.1,1.9,2.1,2.0,1.2,0.8,0.2,0.0]
+        ],
+        "LR": [
+            [0.0,0.2,0.7,0.8,1.1,0.7,0.6,0.2,0.1,0.0],
+            [0.1,0.3,0.4,0.9,1.0,1.0,0.7,0.2,0.1,0.0]
+        ]
+    }
+
+    stats = bland_altman_pooled_3axes(ref, pred, show_plots=True)
+    print(stats)

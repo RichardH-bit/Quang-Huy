@@ -1,0 +1,188 @@
+Công thức
+RMSE & R² cho từng bệnh nhân + tổng hợp
+
+RMSE:  RMSE=n1​i=1∑n​(yi​−y^​i​)2
+​R²: R2=1−∑(yi​−yˉ​)2∑(yi​−y^​i​)2​
+
+-------------------------------
+import numpy as np
+from typing import Dict, List, Tuple, Union
+
+ArrayLike = Union[List[float], np.ndarray]
+
+def rmse_r2(y_true: ArrayLike, y_pred: ArrayLike) -> Tuple[float, float]:
+    """
+    Compute RMSE and R² for 1 patient (1D arrays).
+    """
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+
+    if y_true.shape != y_pred.shape:
+        raise ValueError(f"Shape mismatch: y_true {y_true.shape} vs y_pred {y_pred.shape}")
+    if y_true.ndim != 1:
+        raise ValueError("y_true/y_pred must be 1D arrays (e.g., 10 phases).")
+    if y_true.size < 2:
+        raise ValueError("Need at least 2 points to compute R².")
+
+    # RMSE
+    rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+
+    # R²
+    ss_res = float(np.sum((y_true - y_pred) ** 2))
+    ss_tot = float(np.sum((y_true - np.mean(y_true)) ** 2))
+    # If y_true is constant, ss_tot = 0 => R² undefined. Return NaN.
+    r2 = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+
+    return rmse, r2
+
+
+def evaluate_patients(
+    y_true_list: List[ArrayLike],
+    y_pred_list: List[ArrayLike],
+    patient_ids: List[str] = None,
+) -> Dict:
+    """
+    Evaluate RMSE and R² for multiple patients.
+    Returns per-patient metrics and cohort summary.
+    """
+    if len(y_true_list) != len(y_pred_list):
+        raise ValueError("y_true_list and y_pred_list must have the same length.")
+    n = len(y_true_list)
+
+    if patient_ids is None:
+        patient_ids = [f"P{idx+1:03d}" for idx in range(n)]
+    if len(patient_ids) != n:
+        raise ValueError("patient_ids length must match number of patients.")
+
+    per_patient = []
+    rmses = []
+    r2s = []
+
+    for pid, yt, yp in zip(patient_ids, y_true_list, y_pred_list):
+        rmse, r2 = rmse_r2(yt, yp)
+        per_patient.append({"patient_id": pid, "rmse": rmse, "r2": r2})
+        rmses.append(rmse)
+        r2s.append(r2)
+
+    rmses = np.array(rmses, dtype=float)
+    r2s = np.array(r2s, dtype=float)
+
+    # Summary (ignore NaN R² if any)
+    r2s_valid = r2s[~np.isnan(r2s)]
+
+    summary = {
+        "n_patients": n,
+        "rmse_mean": float(np.mean(rmses)),
+        "rmse_std": float(np.std(rmses, ddof=1)) if n > 1 else 0.0,
+        "rmse_median": float(np.median(rmses)),
+        "rmse_min": float(np.min(rmses)),
+        "rmse_max": float(np.max(rmses)),
+        "r2_mean": float(np.mean(r2s_valid)) if r2s_valid.size else float("nan"),
+        "r2_std": float(np.std(r2s_valid, ddof=1)) if r2s_valid.size > 1 else 0.0,
+        "r2_median": float(np.median(r2s_valid)) if r2s_valid.size else float("nan"),
+        "r2_min": float(np.min(r2s_valid)) if r2s_valid.size else float("nan"),
+        "r2_max": float(np.max(r2s_valid)) if r2s_valid.size else float("nan"),
+    }
+
+    return {"per_patient": per_patient, "summary": summary}
+
+
+# ------------------ Example usage ------------------
+if __name__ == "__main__":
+    # Each patient has 10 phases (example)
+    y_true_list = [
+        [0, 1, 2, 3, 4, 3, 2, 1, 0.5, 0],
+        [0, 2, 3.5, 5, 5.5, 5, 3.2, 2, 1, 0],
+    ]
+    y_pred_list = [
+        [0.1, 1.1, 1.9, 3.1, 3.8, 3.0, 2.1, 0.9, 0.4, -0.1],
+        [0.2, 1.9, 3.6, 4.9, 5.7, 4.8, 3.3, 1.8, 0.9, 0.1],
+    ]
+    results = evaluate_patients(y_true_list, y_pred_list)
+
+    print("Summary:", results["summary"])
+    for row in results["per_patient"]:
+        print(row)
+-------------------------------------------
+Tính cho 3 trục (S–I, A–P, L–R) luôn
+patient = {
+  "SI": (y_true_SI, y_pred_SI),
+  "AP": (y_true_AP, y_pred_AP),
+  "LR": (y_true_LR, y_pred_LR),
+}
+import numpy as np
+from typing import Dict, List, Tuple, Union
+
+ArrayLike = Union[List[float], np.ndarray]
+
+def rmse_r2(y_true: ArrayLike, y_pred: ArrayLike) -> Tuple[float, float]:
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+
+    if y_true.shape != y_pred.shape:
+        raise ValueError(f"Shape mismatch: {y_true.shape} vs {y_pred.shape}")
+    rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+    ss_res = float(np.sum((y_true - y_pred) ** 2))
+    ss_tot = float(np.sum((y_true - np.mean(y_true)) ** 2))
+    r2 = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+    return rmse, r2
+
+
+def evaluate_patients_3axes(
+    patients: List[Dict[str, Tuple[ArrayLike, ArrayLike]]],
+    patient_ids: List[str] = None,
+    axes: Tuple[str, ...] = ("SI", "AP", "LR"),
+) -> Dict:
+    """
+    patients: list of dicts, each dict maps axis -> (y_true, y_pred)
+    """
+    n = len(patients)
+    if patient_ids is None:
+        patient_ids = [f"P{idx+1:03d}" for idx in range(n)]
+
+    per_patient = []
+    # Collect metrics by axis for summary
+    by_axis = {ax: {"rmse": [], "r2": []} for ax in axes}
+
+    for pid, pdata in zip(patient_ids, patients):
+        row = {"patient_id": pid}
+        for ax in axes:
+            yt, yp = pdata[ax]
+            rmse, r2 = rmse_r2(yt, yp)
+            row[f"rmse_{ax}"] = rmse
+            row[f"r2_{ax}"] = r2
+            by_axis[ax]["rmse"].append(rmse)
+            by_axis[ax]["r2"].append(r2)
+        per_patient.append(row)
+
+    summary = {}
+    for ax in axes:
+        rmses = np.asarray(by_axis[ax]["rmse"], dtype=float)
+        r2s = np.asarray(by_axis[ax]["r2"], dtype=float)
+        r2s_valid = r2s[~np.isnan(r2s)]
+
+        summary[ax] = {
+            "rmse_mean": float(np.mean(rmses)),
+            "rmse_std": float(np.std(rmses, ddof=1)) if n > 1 else 0.0,
+            "rmse_median": float(np.median(rmses)),
+            "rmse_min": float(np.min(rmses)),
+            "rmse_max": float(np.max(rmses)),
+            "r2_mean": float(np.mean(r2s_valid)) if r2s_valid.size else float("nan"),
+            "r2_std": float(np.std(r2s_valid, ddof=1)) if r2s_valid.size > 1 else 0.0,
+        }
+
+    return {"per_patient": per_patient, "summary_by_axis": summary}
+
+
+# ------------------ Example usage ------------------
+if __name__ == "__main__":
+    patients = [
+        {
+            "SI": ([0, 1, 2, 3, 4, 3, 2, 1, 0.5, 0], [0.1, 1.1, 1.9, 3.1, 3.8, 3.0, 2.1, 0.9, 0.4, -0.1]),
+            "AP": ([0, 0.5, 1.1, 1.6, 2.0, 1.7, 1.0, 0.6, 0.2, 0], [0.0, 0.6, 1.0, 1.7, 1.9, 1.6, 1.1, 0.5, 0.3, -0.1]),
+            "LR": ([0, 0.3, 0.6, 0.9, 1.0, 0.8, 0.5, 0.3, 0.1, 0], [0.0, 0.2, 0.7, 0.8, 1.1, 0.7, 0.6, 0.2, 0.1, 0.0]),
+        }
+    ]
+    results = evaluate_patients_3axes(patients)
+    print(results["summary_by_axis"])
+    print(results["per_patient"][0])
