@@ -1,6 +1,8 @@
-# PERSONALIZED 3DCT-BASED MOTION-ADAPTIVE MARGINS
+# PERSONALIZED 3DCT-BASED MOTION-ADAPTIVE MARGINS #
+
 Physics-Informed PCA-Based Respiratory Motion Modeling from 4DCT
 A Reproducible Framework for Quantifying Tumor Motion and Enabling Individualized Margin Design in Lung Radiotherapy
+
 ------------------------------
 Overview
 
@@ -26,6 +28,7 @@ Quantifying motion amplitudes in physical units (mm)
 Enabling data-driven approximation of motion envelopes
 
 Importantly, this method does not aim to replace 4DCT, but to provide a pragmatic, physics-informed bridge toward individualized margin design.
+
 ------------------------------------------------------
 Computational Workflow
 
@@ -60,6 +63,7 @@ Anatomical mapping:
 PC1 → S–I
 PC2 → A–P
 PC3 → L–R
+
 -------------------------------------------------------------------------------------------
 Output Files
 | File                      | Description                                         |
@@ -67,6 +71,7 @@ Output Files
 | `pca_results.csv`         | PCA components, variance explained, amplitudes (mm) |
 | `fit_params_by_slice.csv` | Sinusoidal fit parameters (A, φ, C) per slice       |
 | `motion_curves.png`       | Motion trajectories and PCA modes                   |
+
 ------------------------------------------------------------------------------------
 Methodological Clarification (Critical for Reviewers)
 
@@ -79,6 +84,7 @@ Clinically relevant motion (mm) is derived from:
 
 PCA temporal coefficients (pc_scores)
 Peak-to-peak displacement
+
 ---------------------------------------------------------------------------------------
 Reproducibility & Transparency
 
@@ -89,6 +95,7 @@ Script-based deterministic processing
 Independent validation by third parties
 
 All key steps (DIR, PCA, amplitude extraction) are explicitly implemented and accessible.
+
 ----------------------------------------------------------------------------------------
 Relation to Manuscript
 
@@ -99,6 +106,7 @@ The repository corresponds directly to the manuscript sections:
 | Motion Modeling      | DIR + DVF computation   |
 | PCA Analysis         | PCA scripts             |
 | Amplitude Extraction | Post-processing modules |
+
 -----------------------------------------------------------------------------------------
 Clinical Relevance
 
@@ -109,9 +117,9 @@ Reduction of isotropic margin overestimation
 Improved normal tissue sparing (e.g., lung V20, MLD)
 
 It is compatible with:
-
 Monaco TPS (v5.11.03)
 IMRT / VMAT planning workflows
+
 ---------------------------------------------------------------------------------------
 Requirements
 Python ≥ 3.9
@@ -120,22 +128,26 @@ SciPy
 scikit-learn
 matplotlib
 (Optional) SimpleITK / 3D Slicer
+
 ------------------------------------------------------------------------------------------
 Usage
 git clone https://github.com/RichardH-bit/Quang-Huy.git
 cd Quang-Huy
 
 python pca_motion_pipeline.py
+
 ----------------------------------------------------------------------------------------
 Validation Notes
 PCA typically captures >90% motion variance
 Motion amplitudes validated against 4DCT-derived displacement
 Optional sinusoidal fitting provides temporal consistency (RMSE, R²)
+
 ----------------------------------------------------------------------------------------
 Limitations
 Dependent on DIR accuracy
 PCA assumes quasi-periodic motion
 External surrogate signals are not included
+
 ----------------------------------------------------------------------------------------
 Citation
 
@@ -143,12 +155,14 @@ If you use this repository, please cite:
 
 Dang Q.H. et al.
 Bridging respiratory motion modeling and clinical margin personalization in lung radiotherapy using PCA.
+
 ------------------------------------------------------------------------------------------
 Contact
 
 Dr. Dang Quang Huy
 Department of Radiotherapy
 Military Hospital 175, Vietnam
+
 --------------------------------------------------------------------------------------------
 Disclaimer
 
