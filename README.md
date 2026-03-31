@@ -34,23 +34,26 @@ The implemented pipeline strictly follows the methodology described in the manus
 Step 1 – 4DCT Acquisition
 10 respiratory phases (T00–T90)
 Reference phase: end-exhale (e.g., T50)
+
 Step 2 – Deformable Image Registration (DIR)
 B-spline registration between phases
 Output: Deformation Vector Fields (DVFs)
+
 Step 3 – Centroid Extraction
 Tumor centroid computed per phase
 All coordinates mapped to a common reference frame
+
 Step 4 – Motion Matrix Construction
 Displacement vectors across phases
 Units: millimeters (mm)
-Step 5 – Principal Component Analysis (PCA)
 
+Step 5 – Principal Component Analysis (PCA)
 Input: motion matrix
 Output:
-
 pc_scores → temporal coefficients
 pc_components → spatial modes
 explained_variance_ratio
+
 Step 6 – Motion Amplitude Extraction
 Peak-to-peak displacement derived from PCA coefficients
 Anatomical mapping:
