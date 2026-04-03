@@ -1,171 +1,118 @@
-# PERSONALIZED 3DCT-BASED MOTION-ADAPTIVE MARGINS #
+# PCA/SVD-based Respiratory Motion Modeling for Individualized PTV Margin Optimization
 
-Physics-Informed PCA-Based Respiratory Motion Modeling from 4DCT
-A Reproducible Framework for Quantifying Tumor Motion and Enabling Individualized Margin Design in Lung Radiotherapy
+This repository provides a reviewer-friendly, stepwise implementation of the computational workflow described in the manuscript on PCA/SVD-based respiratory motion modeling for individualized PTV margin optimization in NSCLC radiotherapy.
 
-------------------------------
-Overview
+## What this repository contains
 
-This repository provides a fully transparent and reproducible implementation of a physics-informed pipeline for extracting respiratory-induced tumor motion from 4DCT imaging using:
+- A 6-step Python pipeline aligned with the Methods section of the manuscript
+- Example processed data format for reproducibility
+- Outputs for motion amplitudes, explained variance, RMSE, R², and individualized margins
+- Scripts to generate tables and figures for manuscript checking
 
-Deformable Image Registration (DIR)
-Centroid-based motion tracking
-Principal Component Analysis (PCA)
+## Repository structure
 
-The workflow converts raw 4DCT image data into clinically interpretable motion amplitudes (mm) along three anatomical axes (S–I, A–P, L–R), supporting individualized PTV margin strategies.
---------------------------------------
-Scientific Rationale
+```text
+.
+├── README.md
+├── requirements.txt
+├── config.yaml
+├── data/
+│   ├── example_patient/
+│   │   ├── README.md
+│   │   └── phases/                # optional: T00.npy ... T90.npy
+│   ├── masks/
+│   └── processed/
+├── docs/
+│   └── workflow.md
+├── results/
+│   ├── figures/
+│   ├── logs/
+│   └── tables/
+└── src/
+    ├── 01_prepare_data.py
+    ├── 02_run_dir.py
+    ├── 03_build_motion_matrix.py
+    ├── 04_run_pca_svd.py
+    ├── 05_compute_margins.py
+    ├── 06_generate_figures.py
+    └── utils.py
+```
 
-Respiratory motion remains a major source of geometric uncertainty in lung radiotherapy. While 4DCT enables motion visualization, it is:
+## Required input
 
-Resource-intensive
-Not always available in routine clinical workflows
+The pipeline is designed for processed phase-resolved 3D volumes. Raw clinical 4DCT DICOM files are not included in this archive due to privacy restrictions.
 
-This framework addresses the gap by:
+Expected phase names:
 
-Extracting dominant motion patterns using PCA
-Quantifying motion amplitudes in physical units (mm)
-Enabling data-driven approximation of motion envelopes
+- `T00`, `T10`, `T20`, `T30`, `T40`, `T50`, `T60`, `T70`, `T80`, `T90`
 
-Importantly, this method does not aim to replace 4DCT, but to provide a pragmatic, physics-informed bridge toward individualized margin design.
+Reference phase:
 
-------------------------------------------------------
-Computational Workflow
+- `T50` (end-exhalation baseline)
 
-The implemented pipeline strictly follows the methodology described in the manuscript:
+Optional tumor mask:
 
-Step 1 – 4DCT Acquisition
-10 respiratory phases (T00–T90)
-Reference phase: end-exhale (e.g., T50)
+- 3D binary mask in NumPy format aligned with the T50 volume
 
-Step 2 – Deformable Image Registration (DIR)
-B-spline registration between phases
-Output: Deformation Vector Fields (DVFs)
+## Installation
 
-Step 3 – Centroid Extraction
-Tumor centroid computed per phase
-All coordinates mapped to a common reference frame
+```bash
+pip install -r requirements.txt
+```
 
-Step 4 – Motion Matrix Construction
-Displacement vectors across phases
-Units: millimeters (mm)
+## Quick start
 
-Step 5 – Principal Component Analysis (PCA)
-Input: motion matrix
-Output:
-pc_scores → temporal coefficients
-pc_components → spatial modes
-explained_variance_ratio
+### Step 1. Prepare processed volumes
+```bash
+python src/01_prepare_data.py --config config.yaml
+```
 
-Step 6 – Motion Amplitude Extraction
-Peak-to-peak displacement derived from PCA coefficients
-Anatomical mapping:
-PC1 → S–I
-PC2 → A–P
-PC3 → L–R
+### Step 2. Perform deformable registration and export DVFs
+```bash
+python src/02_run_dir.py --config config.yaml
+```
 
--------------------------------------------------------------------------------------------
-Output Files
-| File                      | Description                                         |
-| ------------------------- | --------------------------------------------------- |
-| `pca_results.csv`         | PCA components, variance explained, amplitudes (mm) |
-| `fit_params_by_slice.csv` | Sinusoidal fit parameters (A, φ, C) per slice       |
-| `motion_curves.png`       | Motion trajectories and PCA modes                   |
+### Step 3. Build the motion matrix from ROI-focused DVFs
+```bash
+python src/03_build_motion_matrix.py --config config.yaml
+```
 
-------------------------------------------------------------------------------------
-Methodological Clarification (Critical for Reviewers)
+### Step 4. Run PCA/SVD and compute motion amplitudes
+```bash
+python src/04_run_pca_svd.py --config config.yaml
+```
 
-PCA outputs are frequently misunderstood
+### Step 5. Compute individualized margins
+```bash
+python src/05_compute_margins.py --config config.yaml
+```
 
-PC1–PC3 are NOT motion amplitudes
-They represent orthogonal motion modes
+### Step 6. Generate reviewer-check figures and summary tables
+```bash
+python src/06_generate_figures.py --config config.yaml
+```
 
-Clinically relevant motion (mm) is derived from:
+## Outputs produced by the pipeline
 
-PCA temporal coefficients (pc_scores)
-Peak-to-peak displacement
+- `data/processed/prepared_metadata.json`
+- `data/processed/dvfs/*.npy`
+- `data/processed/motion_matrix.npy`
+- `results/tables/pca_summary.csv`
+- `results/tables/margins.csv`
+- `results/figures/explained_variance.png`
+- `results/figures/temporal_coefficients.png`
+- `results/figures/amplitude_barplot.png`
 
----------------------------------------------------------------------------------------
-Reproducibility & Transparency
+## Reproducibility notes
 
-This repository ensures:
+- The scripts are intentionally separated by processing stage so that reviewers can inspect each step independently.
+- Each script writes logs and intermediate outputs.
+- The DIR script includes a practical fallback for environments where full clinical registration backends are unavailable.
 
-Full traceability from input images → final motion metrics
-Script-based deterministic processing
-Independent validation by third parties
+## Suggested manuscript statement
 
-All key steps (DIR, PCA, amplitude extraction) are explicitly implemented and accessible.
+Code and representative processed datasets used in this study are publicly available at the project repository. The repository includes the complete computational workflow for preprocessing, deformable registration, ROI-based motion matrix construction, PCA/SVD analysis, amplitude calibration, and individualized margin calculation.
 
-----------------------------------------------------------------------------------------
-Relation to Manuscript
+## Citation
 
-The repository corresponds directly to the manuscript sections:
-| Manuscript Section   | Repository Component    |
-| -------------------- | ----------------------- |
-| Data Acquisition     | 4DCT input handling     |
-| Motion Modeling      | DIR + DVF computation   |
-| PCA Analysis         | PCA scripts             |
-| Amplitude Extraction | Post-processing modules |
-
------------------------------------------------------------------------------------------
-Clinical Relevance
-
-The framework supports:
-
-Individualized motion quantification
-Reduction of isotropic margin overestimation
-Improved normal tissue sparing (e.g., lung V20, MLD)
-
-It is compatible with:
-Monaco TPS (v5.11.03)
-IMRT / VMAT planning workflows
-
----------------------------------------------------------------------------------------
-Requirements
-Python ≥ 3.9
-NumPy
-SciPy
-scikit-learn
-matplotlib
-(Optional) SimpleITK / 3D Slicer
-
-------------------------------------------------------------------------------------------
-Usage
-git clone https://github.com/RichardH-bit/Quang-Huy.git
-cd Quang-Huy
-
-python pca_motion_pipeline.py
-
-----------------------------------------------------------------------------------------
-Validation Notes
-PCA typically captures >90% motion variance
-Motion amplitudes validated against 4DCT-derived displacement
-Optional sinusoidal fitting provides temporal consistency (RMSE, R²)
-
-----------------------------------------------------------------------------------------
-Limitations
-Dependent on DIR accuracy
-PCA assumes quasi-periodic motion
-External surrogate signals are not included
-
-----------------------------------------------------------------------------------------
-Citation
-
-If you use this repository, please cite:
-
-Dang Q.H. et al.
-Bridging respiratory motion modeling and clinical margin personalization in lung radiotherapy using PCA.
-
-------------------------------------------------------------------------------------------
-Contact
-
-Dr. Dang Quang Huy
-Department of Radiotherapy
-Military Hospital 175, Vietnam
---------------------------------------------------------------------------------------------
-Archived version: https://doi.org/10.5281/zenodo.19396101
-
---------------------------------------------------------------------------------------------
-Disclaimer
-
-This code is intended for research use only and requires clinical validation before deployment.
+If this code is used in research, please cite the corresponding manuscript and archived DOI release.
