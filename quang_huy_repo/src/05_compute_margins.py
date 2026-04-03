@@ -1,82 +1,95 @@
-from __future__ import annotations
+# -----------------------------
+# BƯỚC 5: TÍNH BIÊN PTV CÁ NHÂN HÓA
+# Áp dụng mô hình kết hợp PCA + yếu tố lâm sàng (Fpos, FT)
+# -----------------------------
 
+import numpy as np
 import logging
-import math
-from pathlib import Path
-
-import pandas as pd
-
-from utils import ensure_dir, load_config, parse_args, setup_logging
+from utils import setup_logging, load_config
 
 
-DIRECTION_MAP = {
-    "S-I": "M_SI_mm",
-    "A-P": "M_AP_mm",
-    "L-R": "M_LR_mm",
-}
+def get_Fpos(tumor_location: str) -> float:
+    """
+    Xác định hệ số vị trí khối u
+    upper lobe: chuyển động nhỏ hơn
+    mid/lower lobe: chuyển động lớn hơn
+    """
+    if tumor_location.lower() == "upper":
+        return 1.0
+    elif tumor_location.lower() in ["middle", "lower"]:
+        return 1.2
+    else:
+        raise ValueError("Unknown tumor location")
 
 
-def main() -> None:
-    args = parse_args("Step 5: Compute individualized margins from calibrated PCA amplitudes")
-    cfg = load_config(args.config)
-    root_dir = Path(cfg["paths"]["root_dir"])
-    results_dir = ensure_dir(root_dir / cfg["paths"]["results_dir"])
-    tables_dir = ensure_dir(results_dir / "tables")
-    logs_dir = ensure_dir(root_dir / cfg["paths"]["logs_dir"])
-    setup_logging(logs_dir / "05_compute_margins.log")
+def get_FT(T_stage: str) -> float:
+    """
+    Hệ số giai đoạn T
+    T1/T2: di động nhiều hơn
+    T3/T4: bị cố định hơn → giảm biên
+    """
+    if T_stage in ["T1", "T2"]:
+        return 1.1
+    elif T_stage in ["T3", "T4"]:
+        return 0.9
+    else:
+        raise ValueError("Unknown T stage")
 
-    pca_summary = pd.read_csv(tables_dir / "pca_summary.csv")
 
-    sigma_sys = float(cfg["margin"]["systematic_error_mm"])
-    sigma_rand = float(cfg["margin"]["random_error_mm"])
-    alpha = float(cfg["margin"]["alpha"])
-    location_group = cfg["clinical"]["tumor_location_group"]
-    t_stage_group = cfg["clinical"]["t_stage_group"]
-    f_pos = float(cfg["margin"]["tumor_location_factor"][location_group])
-    f_t = float(cfg["margin"]["t_stage_factor"][t_stage_group])
+def main():
+    setup_logging("logs/05_margin.log")
+    logging.info("Bắt đầu tính biên PTV cá nhân hóa")
 
-    directional_margins = {"M_SI_mm": None, "M_AP_mm": None, "M_LR_mm": None}
-    rows = []
-    for _, row in pca_summary.iterrows():
-        amplitude_mm = float(row["amplitude_mm"])
-        direction = str(row["dominant_direction"])
-        margin_mm = math.sqrt((2.5 * sigma_sys) ** 2 + (0.7 * sigma_rand) ** 2 + (alpha * f_pos * f_t * amplitude_mm) ** 2)
-        rows.append(
-            {
-                "component": row["component"],
-                "dominant_direction": direction,
-                "amplitude_mm": amplitude_mm,
-                "f_pos": f_pos,
-                "f_t": f_t,
-                "alpha": alpha,
-                "margin_mm": margin_mm,
-            }
-        )
-        mapped_name = DIRECTION_MAP.get(direction)
-        if mapped_name is not None:
-            directional_margins[mapped_name] = margin_mm
+    cfg = load_config("config.yaml")
 
-    margins_df = pd.DataFrame(rows)
-    margins_df.to_csv(tables_dir / "margins.csv", index=False)
+    # -----------------------------
+    # Load PCA amplitudes (mm)
+    # -----------------------------
+    PCs = np.load("processed/PCs.npy")
 
-    composite_margin_3d = math.sqrt(
-        sum((value or 0.0) ** 2 for value in directional_margins.values())
-    ) + 2.0
-    composite_df = pd.DataFrame(
-        [
-            {
-                **directional_margins,
-                "composite_margin_3d_mm": composite_margin_3d,
-                "tumor_location_group": location_group,
-                "t_stage_group": t_stage_group,
-            }
-        ]
+    # Biên độ dao động trung bình theo từng trục
+    A_mean = np.std(PCs, axis=0)  # [SI, AP, LR]
+
+    # -----------------------------
+    # Load thông tin lâm sàng từ config
+    # -----------------------------
+    tumor_location = cfg["clinical"]["tumor_location"]  # upper / middle / lower
+    T_stage = cfg["clinical"]["T_stage"]                # T1–T4
+
+    Fpos = get_Fpos(tumor_location)
+    FT = get_FT(T_stage)
+
+    logging.info(f"Fpos = {Fpos}, FT = {FT}")
+
+    # -----------------------------
+    # Tham số hệ thống
+    # -----------------------------
+    Sigma = cfg["margin"]["Sigma"]   # systematic error
+    sigma = cfg["margin"]["sigma"]   # random error
+    alpha = cfg["margin"]["alpha"]   # scaling factor
+
+    # -----------------------------
+    # Tính biên theo từng trục
+    # -----------------------------
+    margins = np.sqrt(
+        (2.5 * Sigma) ** 2 +
+        (0.7 * sigma) ** 2 +
+        (alpha * Fpos * FT * A_mean) ** 2
     )
-    composite_df.to_csv(tables_dir / "composite_margin_summary.csv", index=False)
 
-    logging.info("Saved individualized margins to %s", tables_dir / "margins.csv")
-    logging.info("Composite 3D margin = %.3f mm", composite_margin_3d)
-    logging.info("Margin computation complete")
+    # -----------------------------
+    # Tính biên 3D tổng hợp
+    # -----------------------------
+    margin_3D = np.sqrt(np.sum(margins ** 2)) + 2  # +2 mm safety
+
+    np.save("processed/margins.npy", margins)
+
+    logging.info(f"Biên theo trục (SI, AP, LR): {margins}")
+    logging.info(f"Biên 3D tổng hợp: {margin_3D:.2f} mm")
+
+    print("\n===== KẾT QUẢ =====")
+    print(f"Biên SI, AP, LR (mm): {margins}")
+    print(f"Biên 3D (mm): {margin_3D:.2f}")
 
 
 if __name__ == "__main__":
