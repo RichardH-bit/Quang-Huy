@@ -1,0 +1,41 @@
+project_name: Quang-Huy-PCA-SVD-Motion
+paths:
+  root_dir: .
+  example_patient_dir: data/example_patient
+  processed_dir: data/processed
+  masks_dir: data/masks
+  results_dir: results
+  logs_dir: results/logs
+phases:
+  names: [T00, T10, T20, T30, T40, T50, T60, T70, T80, T90]
+  reference_phase: T50
+image:
+  expected_shape: [64, 64, 32]
+  spacing_mm: [1.0, 1.0, 2.5]
+  intensity_clip: [-1000, 400]
+  normalize: true
+roi:
+  mask_filename: tumor_mask.npy
+  default_radius_voxels: 8
+registration:
+  method: demons
+  smoothing_sigma: 1.5
+  iterations: 50
+  use_identity_fallback_if_failed: true
+pca:
+  n_components: 3
+  calibration_units_per_mm: 1000.0
+margin:
+  systematic_error_mm: 2.5
+  random_error_mm: 1.5
+  alpha: 0.5
+  tumor_location_factor:
+    upper_lobe: 1.0
+    middle_lower_lobe: 1.2
+  t_stage_factor:
+    T1_T2: 1.1
+    T3_T4: 0.9
+clinical:
+  tumor_location_group: middle_lower_lobe
+  t_stage_group: T3_T4
+random_seed: 42
