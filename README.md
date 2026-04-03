@@ -162,6 +162,8 @@ Contact
 Dr. Dang Quang Huy
 Department of Radiotherapy
 Military Hospital 175, Vietnam
+--------------------------------------------------------------------------------------------
+Archived version: https://doi.org/10.5281/zenodo.19396101
 
 --------------------------------------------------------------------------------------------
 Disclaimer
